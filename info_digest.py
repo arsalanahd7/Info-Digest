@@ -13,7 +13,6 @@ Automate (cron, runs at 7am daily):
 """
 
 import os
-import json
 from datetime import datetime
 from dotenv import load_dotenv
 import anthropic
@@ -162,30 +161,9 @@ def research_section(client: anthropic.Anthropic, section: dict) -> str:
     return result_text.strip() if result_text else "No findings retrieved."
 
 
-# ── Build Digest Page Content ──────────────────────────────────────────────────
-
-def build_digest_content(sections_data: list[dict]) -> str:
-    """Build Notion-flavored markdown for the digest page."""
-    today = datetime.now().strftime("%A, %B %d, %Y")
-    lines = [
-        f"> Auto-generated at {datetime.now().strftime('%I:%M %p')} · Powered by Claude + Web Search",
-        "",
-    ]
-
-    for section in sections_data:
-        lines.append(f"## {section['emoji']} {section['title']}")
-        lines.append("")
-        lines.append(section["content"])
-        lines.append("")
-        lines.append("---")
-        lines.append("")
-
-    return "\n".join(lines)
-
-
 # ── Push to Notion ─────────────────────────────────────────────────────────────
 
-def push_to_notion(notion: Client, content: str):
+def push_to_notion(notion: Client, sections_data: list[dict]):
     """Create a new child page under the Info Digest hub page."""
     today = datetime.now().strftime("%B %d, %Y")
     page_title = f"📰 Info Digest — {today}"
@@ -251,16 +229,14 @@ def main():
     anthropic_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     notion_client = Client(auth=NOTION_API_KEY)
 
-    # Research each section
-    global sections_data
-    sections_data = []
-    for section in SECTIONS:
-        content = research_section(anthropic_client, section)
-        sections_data.append({
+    sections_data = [
+        {
             "emoji": section["emoji"],
             "title": section["title"],
-            "content": content
-        })
+            "content": research_section(anthropic_client, section),
+        }
+        for section in SECTIONS
+    ]
 
     print("\n📝 Building digest and pushing to Notion...")
     push_to_notion(notion_client, sections_data)
