@@ -13,6 +13,7 @@ Automate (cron, runs at 7am daily):
 """
 
 import os
+import time
 from datetime import datetime
 from dotenv import load_dotenv
 import anthropic
@@ -24,7 +25,10 @@ load_dotenv()
 
 ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
 NOTION_API_KEY    = os.environ["NOTION_API_KEY"]
-INFO_DIGEST_PAGE_ID = "344d7b57-ec43-8181-ae85-cf296288a95f"  # Hub child page created above
+INFO_DIGEST_PAGE_ID = os.environ["NOTION_INFO_DIGEST_PAGE_ID"]
+
+MODEL = "claude-sonnet-4-6"
+MAX_RETRIES = 3
 
 # ── OS Context (pulled from your Systems Manual) ────────────────────────────────
 
@@ -140,25 +144,38 @@ def research_section(client: anthropic.Anthropic, section: dict) -> str:
     """Use Claude with web search to research one digest section."""
     print(f"  Researching: {section['emoji']} {section['title']}...")
 
-    response = client.messages.create(
-        model="claude-sonnet-4-20250514",
-        max_tokens=1000,
-        tools=[{"type": "web_search_20250305", "name": "web_search"}],
-        messages=[
-            {
-                "role": "user",
-                "content": section["prompt"] + "\n\nFormat your response as a tight bulleted list. No preamble."
-            }
-        ]
+    system_prompt = (
+        "You are researching for the person whose operating context is below. "
+        "Let it shape what you surface — prioritize findings relevant to their goals, "
+        "systems, and tools. Skip anything generic they'd already know.\n\n"
+        f"{OS_CONTEXT.strip()}"
     )
 
-    # Extract text from response (may include tool use blocks)
-    result_text = ""
-    for block in response.content:
-        if block.type == "text":
-            result_text += block.text
+    last_err = None
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            response = client.messages.create(
+                model=MODEL,
+                max_tokens=1000,
+                system=system_prompt,
+                tools=[{"type": "web_search_20250305", "name": "web_search"}],
+                messages=[
+                    {
+                        "role": "user",
+                        "content": section["prompt"] + "\n\nFormat your response as a tight bulleted list. No preamble."
+                    }
+                ]
+            )
+            result_text = "".join(b.text for b in response.content if b.type == "text")
+            return result_text.strip() if result_text else "No findings retrieved."
+        except (anthropic.APIError, anthropic.APIConnectionError) as e:
+            last_err = e
+            if attempt < MAX_RETRIES:
+                backoff = 2 ** attempt
+                print(f"    ⚠️  Attempt {attempt} failed ({e}); retrying in {backoff}s...")
+                time.sleep(backoff)
 
-    return result_text.strip() if result_text else "No findings retrieved."
+    return f"⚠️ Research failed after {MAX_RETRIES} attempts: {last_err}"
 
 
 # ── Push to Notion ─────────────────────────────────────────────────────────────
@@ -168,15 +185,15 @@ def push_to_notion(notion: Client, sections_data: list[dict]):
     today = datetime.now().strftime("%B %d, %Y")
     page_title = f"📰 Info Digest — {today}"
 
-    notion.pages.create(
-        parent={"page_id": INFO_DIGEST_PAGE_ID},
-        icon={"type": "emoji", "emoji": "📰"},
-        properties={
+    payload = {
+        "parent": {"page_id": INFO_DIGEST_PAGE_ID},
+        "icon": {"type": "emoji", "emoji": "📰"},
+        "properties": {
             "title": {
                 "title": [{"type": "text", "text": {"content": page_title}}]
             }
         },
-        children=[
+        "children": [
             {
                 "object": "block",
                 "type": "callout",
@@ -187,9 +204,22 @@ def push_to_notion(notion: Client, sections_data: list[dict]):
                 }
             },
             *[build_section_blocks(s) for s in sections_data],
-        ]
-    )
-    print(f"\n✅ Digest pushed to Notion: {page_title}")
+        ],
+    }
+
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            notion.pages.create(**payload)
+            print(f"\n✅ Digest pushed to Notion: {page_title}")
+            return
+        except Exception as e:
+            if attempt < MAX_RETRIES:
+                backoff = 2 ** attempt
+                print(f"  ⚠️  Notion push attempt {attempt} failed ({e}); retrying in {backoff}s...")
+                time.sleep(backoff)
+            else:
+                print(f"\n❌ Notion push failed after {MAX_RETRIES} attempts: {e}")
+                raise
 
 
 def build_section_blocks(section: dict) -> dict:

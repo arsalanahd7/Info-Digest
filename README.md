@@ -11,12 +11,14 @@ pip install anthropic notion-client python-dotenv
 ```
 ANTHROPIC_API_KEY=your_key_here
 NOTION_API_KEY=your_key_here
+NOTION_INFO_DIGEST_PAGE_ID=your_page_id_here
 ```
 
 Get your keys:
 - Anthropic: https://console.anthropic.com → API Keys
 - Notion: https://www.notion.so/my-integrations → New integration → copy "Internal Integration Secret"
   - Then open your "Info Digest" page in Notion → click "..." → Connections → connect your integration
+- Page ID: open the Info Digest page in Notion → Share → Copy link. The ID is the 32-char string at the end of the URL (e.g. `.../Info-Digest-344d7b57ec438181ae85cf296288a95f` → `344d7b57-ec43-8181-ae85-cf296288a95f`)
 
 ## 3. Run manually
 ```
